@@ -40,11 +40,7 @@ import statsmodels.api as sm
 from statsmodels.formula.api import ols
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 
-# Machine Learning
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+# Forecasting evaluation
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
 
@@ -689,10 +685,10 @@ plt.show()
 
 # CELL 13
 # =============================================================================
-# FEATURE ENGINEERING (Enhanced)
+# FEATURE ENGINEERING & FORECAST SETUP
 # =============================================================================
 
-print_section("FEATURE ENGINEERING")
+print_section("FEATURE ENGINEERING & FORECAST CONFIGURATION")
 
 FORECAST_MONTHS = 24
 last_date = pd.to_datetime(f"{df['year'].max()}-{df['month'].max():02d}-01")
@@ -711,288 +707,34 @@ df_ml['month_cos'] = np.cos(2 * np.pi * df_ml['month'] / 12)
 df_ml['crash_rate_per_100k'] = (df_ml['crashes_total'] / df_ml['aadt']) * 100000
 df_ml['is_pandemic'] = df_ml['year'].isin([2020, 2021]).astype(int)
 
-# Lag features (per road)
-for lag in [1, 3, 6, 12]:
-    df_ml[f'crashes_lag_{lag}'] = df_ml.groupby('road_name')['crashes_total'].shift(lag)
-
-# Rolling means (per road)
-df_ml['crashes_rolling_3'] = df_ml.groupby('road_name')['crashes_total'].transform(
-    lambda x: x.rolling(3, min_periods=1).mean()
-)
-df_ml['crashes_rolling_6'] = df_ml.groupby('road_name')['crashes_total'].transform(
-    lambda x: x.rolling(6, min_periods=1).mean()
-)
-
-# Year-over-year change
-df_ml['yoy_change'] = df_ml.groupby('road_name')['crashes_total'].pct_change(12)
-
-# Severity ratios
-df_ml['fatal_ratio'] = df_ml['crashes_fatal'] / df_ml['crashes_total'].clip(lower=1)
-df_ml['nonfatal_ratio'] = df_ml['crashes_non_fatal'] / df_ml['crashes_total'].clip(lower=1)
-
-# Fill NaN from lag/rolling with 0
-df_ml = df_ml.fillna(0)
-
 print("✓ Features engineered:")
-print("  • Cyclical: month_sin, month_cos")
-print("  • Lag features: crashes_lag_1, _3, _6, _12")
-print("  • Rolling means: crashes_rolling_3, _6")
-print("  • Rates: crash_rate_per_100k, fatal_ratio, nonfatal_ratio")
-print("  • Contextual: is_pandemic, yoy_change")
-print(f"\n  Total features available: {df_ml.shape[1]} columns")
-print(f"  Forecast configuration: {FORECAST_MONTHS} months (2025-2026)")
+print("  • Cyclical encoding: month_sin, month_cos")
+print("  • Crash rate per 100k AADT (traffic-normalized)")
+print("  • Pandemic flag (2020-2021)")
+print(f"\n  Forecast horizon: {FORECAST_MONTHS} months ({forecast_dates[0].strftime('%b %Y')} – {forecast_dates[-1].strftime('%b %Y')})")
+print(f"  Model: SARIMAX(1,1,1)(1,1,1,12) with AADT as exogenous variable")
 
 # CELL 14
 # =============================================================================
-# PER-ROAD CRASH PREDICTION: Random Forest & Gradient Boosting
+# SARIMA FORECASTING: PER-ROAD CRASH PREDICTIONS (2025-2026)
 # =============================================================================
 
-print_section("MACHINE LEARNING: Per-Road Crash Prediction")
-
-FEATURES = ['aadt', 'month_sin', 'month_cos', 'is_pandemic',
-            'crashes_lag_1', 'crashes_lag_3', 'crashes_lag_6', 'crashes_lag_12',
-            'crashes_rolling_3', 'crashes_rolling_6', 'yoy_change']
-TARGET = 'crashes_total'
-
-ml_results = {}
-feature_importances = {}
-
-roads_sorted = sorted(df_ml['road_name'].unique())
-
-for i, road in enumerate(roads_sorted, 1):
-    print(f"\n[{i}/7] {road}")
-    print("-" * 60)
-
-    road_data = df_ml[df_ml['road_name'] == road].sort_values('date').copy()
-
-    # Temporal split: 2019-2023 train, 2024 test
-    train = road_data[road_data['year'] < 2024]
-    test = road_data[road_data['year'] >= 2024]
-
-    if len(train) < 12 or len(test) == 0:
-        print("  ⚠ Insufficient data, skipping")
-        continue
-
-    X_train, y_train = train[FEATURES], train[TARGET]
-    X_test, y_test = test[FEATURES], test[TARGET]
-
-    # Scale features
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
-
-    road_results = {}
-
-    # --- Random Forest ---
-    rf = RandomForestRegressor(n_estimators=200, max_depth=8, random_state=42, n_jobs=-1)
-    rf.fit(X_train_scaled, y_train)
-    rf_pred = rf.predict(X_test_scaled)
-
-    road_results['Random Forest'] = {
-        'MAE': mean_absolute_error(y_test, rf_pred),
-        'RMSE': np.sqrt(mean_squared_error(y_test, rf_pred)),
-        'R2': r2_score(y_test, rf_pred),
-        'predictions': rf_pred,
-        'model': rf, 'scaler': scaler
-    }
-
-    # Store feature importances
-    feature_importances[road] = dict(zip(FEATURES, rf.feature_importances_))
-
-    # --- Gradient Boosting ---
-    gb = GradientBoostingRegressor(n_estimators=200, max_depth=5, learning_rate=0.1, random_state=42)
-    gb.fit(X_train_scaled, y_train)
-    gb_pred = gb.predict(X_test_scaled)
-
-    road_results['Gradient Boosting'] = {
-        'MAE': mean_absolute_error(y_test, gb_pred),
-        'RMSE': np.sqrt(mean_squared_error(y_test, gb_pred)),
-        'R2': r2_score(y_test, gb_pred),
-        'predictions': gb_pred,
-        'model': gb, 'scaler': scaler
-    }
-
-    ml_results[road] = {'results': road_results, 'y_test': y_test, 'test_dates': test['date'].values}
-
-    # Print results
-    for model_name, metrics in road_results.items():
-        print(f"  {model_name:20s} | MAE: {metrics['MAE']:7.1f} | RMSE: {metrics['RMSE']:7.1f} | R²: {metrics['R2']:6.3f}")
-
-# --- Visualization: Actual vs Predicted per road ---
-fig, axes = plt.subplots(4, 2, figsize=(16, 14))
-
-for idx, road in enumerate(roads_sorted):
-    row_i = idx // 2
-    col_i = idx % 2
-    ax = axes[row_i, col_i]
-
-    if road not in ml_results:
-        ax.axis('off')
-        continue
-
-    data = ml_results[road]
-    dates = data['test_dates']
-    actual = data['y_test'].values
-
-    ax.plot(dates, actual, 'ko-', label='Actual', linewidth=2, markersize=5)
-    for model_name, metrics in data['results'].items():
-        ax.plot(dates, metrics['predictions'], '--', label=f'{model_name} (R²={metrics["R2"]:.2f})',
-                linewidth=1.5, markersize=4, marker='s')
-
-    ax.set_title(f'{road}', fontsize=11, fontweight='bold')
-    ax.set_xlabel('Date', fontsize=9)
-    ax.set_ylabel('Crashes', fontsize=9)
-    ax.legend(fontsize=7, loc='best')
-    ax.grid(True, alpha=0.3, linestyle='--')
-    ax.tick_params(axis='x', rotation=45)
-
-axes[3, 1].axis('off')
-fig.suptitle('ML Models: Actual vs Predicted Crashes (2024 Test Set)', fontsize=15, fontweight='bold')
-plt.tight_layout()
-plt.show()
-
-# CELL 15
-# =============================================================================
-# FEATURE IMPORTANCE ANALYSIS
-# =============================================================================
-
-print_section("FEATURE IMPORTANCE ANALYSIS")
-
-fig, axes = plt.subplots(4, 2, figsize=(16, 14))
-
-for idx, road in enumerate(roads_sorted):
-    row_i = idx // 2
-    col_i = idx % 2
-    ax = axes[row_i, col_i]
-
-    if road not in feature_importances:
-        ax.axis('off')
-        continue
-
-    imp = feature_importances[road]
-    sorted_imp = sorted(imp.items(), key=lambda x: x[1], reverse=True)
-    names = [x[0] for x in sorted_imp]
-    values = [x[1] for x in sorted_imp]
-
-    bars = ax.barh(range(len(names)), values, color=get_road_color(road), edgecolor='black', linewidth=0.5)
-    ax.set_yticks(range(len(names)))
-    ax.set_yticklabels(names, fontsize=8)
-    ax.set_title(f'{road}', fontsize=11, fontweight='bold')
-    ax.set_xlabel('Importance', fontsize=9)
-    ax.invert_yaxis()
-
-axes[3, 1].axis('off')
-fig.suptitle('Random Forest Feature Importance by Road', fontsize=15, fontweight='bold')
-plt.tight_layout()
-plt.show()
-
-# Overall top features
-print("\nTop 3 Most Important Features per Road:")
-print("-" * 60)
-for road in roads_sorted:
-    if road not in feature_importances:
-        continue
-    imp = feature_importances[road]
-    top3 = sorted(imp.items(), key=lambda x: x[1], reverse=True)[:3]
-    features_str = ', '.join([f"{n} ({v:.3f})" for n, v in top3])
-    print(f"  {road:25s} → {features_str}")
-
-# CELL 16
-# =============================================================================
-# CRASH SEVERITY PREDICTION PER ROAD
-# =============================================================================
-
-print_section("CRASH SEVERITY PREDICTION PER ROAD")
-
-SEVERITY_FEATURES = ['aadt', 'month_sin', 'month_cos', 'is_pandemic',
-                     'crashes_lag_1', 'crashes_rolling_3', 'crashes_rolling_6']
-
-severity_predictions = {}
-
-for i, road in enumerate(roads_sorted, 1):
-    print(f"\n[{i}/7] {road}")
-    print("-" * 60)
-
-    road_data = df_ml[df_ml['road_name'] == road].sort_values('date').copy()
-    train = road_data[road_data['year'] < 2024]
-    test = road_data[road_data['year'] >= 2024]
-
-    if len(train) < 12 or len(test) == 0:
-        continue
-
-    road_severity = {}
-
-    for severity, color_s in [('crashes_fatal', '#E74C3C'),
-                                ('crashes_non_fatal', '#F39C12'),
-                                ('crashes_property', '#3498DB')]:
-        scaler_s = StandardScaler()
-        X_tr = scaler_s.fit_transform(train[SEVERITY_FEATURES])
-        X_te = scaler_s.transform(test[SEVERITY_FEATURES])
-
-        gb_s = GradientBoostingRegressor(n_estimators=150, max_depth=4, learning_rate=0.1, random_state=42)
-        gb_s.fit(X_tr, train[severity])
-        pred_s = gb_s.predict(X_te)
-
-        road_severity[severity] = {
-            'actual': test[severity].values,
-            'predicted': pred_s,
-            'MAE': mean_absolute_error(test[severity], pred_s),
-            'R2': r2_score(test[severity], pred_s) if test[severity].std() > 0 else 0
-        }
-
-        print(f"  {severity:22s} | MAE: {road_severity[severity]['MAE']:6.1f} | R²: {road_severity[severity]['R2']:6.3f}")
-
-    severity_predictions[road] = road_severity
-
-# Visualization: Severity predictions for top 3 highest-crash roads
-top_roads = df.groupby('road_name')['crashes_total'].sum().sort_values(ascending=False).head(3).index
-
-fig, axes = plt.subplots(3, 3, figsize=(18, 12))
-severity_labels = {'crashes_fatal': 'Fatal', 'crashes_non_fatal': 'Non-Fatal', 'crashes_property': 'Property'}
-severity_colors = {'crashes_fatal': '#E74C3C', 'crashes_non_fatal': '#F39C12', 'crashes_property': '#3498DB'}
-
-for r_idx, road in enumerate(top_roads):
-    if road not in severity_predictions:
-        continue
-    test_dates = df_ml[(df_ml['road_name'] == road) & (df_ml['year'] >= 2024)]['date'].values
-
-    for s_idx, (sev, label) in enumerate(severity_labels.items()):
-        ax = axes[r_idx, s_idx]
-        data = severity_predictions[road][sev]
-        ax.plot(test_dates, data['actual'], 'ko-', label='Actual', linewidth=2, markersize=5)
-        ax.plot(test_dates, data['predicted'], '--', color=severity_colors[sev],
-                label=f'Predicted (R²={data["R2"]:.2f})', linewidth=1.5, markersize=4, marker='s')
-        ax.set_title(f'{road[:15]}... - {label}' if len(road) > 15 else f'{road} - {label}',
-                     fontsize=10, fontweight='bold')
-        ax.legend(fontsize=7)
-        ax.grid(True, alpha=0.3, linestyle='--')
-        ax.tick_params(axis='x', rotation=45)
-
-fig.suptitle('Crash Severity Predictions: Top 3 Roads (2024 Test)', fontsize=15, fontweight='bold')
-plt.tight_layout()
-plt.show()
-
-# CELL 17
-# =============================================================================
-# SARIMA FORECASTING PER ROAD (Fixed)
-# =============================================================================
-
-print_section("SARIMA FORECASTING: Per-Road (2025-2026)")
+print_section("SARIMA FORECASTING: Per-Road Crash Predictions (2025-2026)")
 
 predictions_by_road = {}
 sarima_eval = {}
 
+roads_sorted = sorted(df_ml['road_name'].unique())
+
 for road in roads_sorted:
     road_data = df_ml[df_ml['road_name'] == road].set_index('date').sort_index()
-
-    # Full model for forecasting
     y = road_data['crashes_total']
     exog = road_data[['aadt']]
 
     print(f"Forecasting {road}...")
     mean_fc, ci_fc = run_sarima_forecast(
         y, exog=exog,
-        title=f"{road} - SARIMA Crash Forecast (2025-2026)",
+        title=f"{road} – Crash Forecast (2025-2026)",
         y_label="Total Crashes"
     )
     predictions_by_road[road] = {
@@ -1020,157 +762,385 @@ for road in roads_sorted:
         except:
             pass
 
-# CELL 18
-# =============================================================================
-# MODEL COMPARISON: SARIMA vs Random Forest vs Gradient Boosting
-# =============================================================================
+# Per-road forecast summary
+print("\n" + "=" * 80)
+print("PER-ROAD FORECAST SUMMARY")
+print("=" * 80)
 
-print_section("MODEL COMPARISON: SARIMA vs ML Models")
-
-comparison_rows = []
 for road in roads_sorted:
-    row_data = {'Road': road}
+    data = predictions_by_road[road]
+    hist_avg = data['historical'][-12:].mean()
+    fc_avg = data['forecast'].mean()
+    change = ((fc_avg - hist_avg) / hist_avg) * 100
 
-    # SARIMA metrics
+    print(f"\n  {road}:")
+    print(f"    2024 Avg: {hist_avg:.0f} crashes/month")
+    print(f"    Forecast Avg: {fc_avg:.0f} crashes/month ({change:+.1f}%)")
+    print(f"    2025 Total: {data['forecast'][:12].sum():.0f} | 2026 Total: {data['forecast'][12:].sum():.0f}")
+
     if road in sarima_eval:
-        row_data['SARIMA_MAE'] = sarima_eval[road]['MAE']
-        row_data['SARIMA_RMSE'] = sarima_eval[road]['RMSE']
-        row_data['SARIMA_R2'] = sarima_eval[road]['R2']
+        e = sarima_eval[road]
+        print(f"    Model Accuracy (2024 test): MAE={e['MAE']:.1f}, RMSE={e['RMSE']:.1f}, R²={e['R2']:.3f}")
 
-    # ML metrics
-    if road in ml_results:
-        for model_name, metrics in ml_results[road]['results'].items():
-            short = model_name.replace(' ', '_')
-            row_data[f'{short}_MAE'] = metrics['MAE']
-            row_data[f'{short}_RMSE'] = metrics['RMSE']
-            row_data[f'{short}_R2'] = metrics['R2']
+# CELL 15
+# =============================================================================
+# SARIMA FORECASTING: ALL ROADS COMBINED (2025-2026)
+# =============================================================================
 
-    comparison_rows.append(row_data)
+print_section("SARIMA FORECASTING: All Roads Combined (2025-2026)")
 
-comparison_df = pd.DataFrame(comparison_rows)
+total_crashes = df_ml.groupby('date')['crashes_total'].sum().sort_index()
+total_aadt = df_ml.groupby('date')['aadt'].sum().sort_index()
 
-# Find best model per road
-print("\nBest Model per Road (by lowest MAE on 2024 test set):")
-print("-" * 70)
+print(f"Dataset: {len(total_crashes)} months of combined crash data")
+print(f"Period: {total_crashes.index[0].strftime('%Y-%m')} to {total_crashes.index[-1].strftime('%Y-%m')}")
+print(f"Total crashes across all roads: {total_crashes.sum():,}")
+print("\n" + "=" * 70)
 
-best_models = {}
-for _, row in comparison_df.iterrows():
-    road = row['Road']
-    mae_cols = {c: row[c] for c in row.index if c.endswith('_MAE') and pd.notna(row[c])}
-    if mae_cols:
-        best_col = min(mae_cols, key=mae_cols.get)
-        best_model = best_col.replace('_MAE', '').replace('_', ' ')
-        best_mae = mae_cols[best_col]
-        best_models[road] = best_model
-        print(f"  {road:25s} → {best_model:20s} (MAE: {best_mae:.1f})")
+exog_total = pd.DataFrame({'aadt': total_aadt})
 
-# Visualization: MAE comparison bar chart
-fig, ax = plt.subplots(figsize=(14, 7))
+print("Building SARIMAX model for combined Metro Manila data...")
+model_total = SARIMAX(
+    total_crashes, exog=exog_total,
+    order=(1, 1, 1), seasonal_order=(1, 1, 1, 12),
+    enforce_stationarity=False, enforce_invertibility=False
+)
+results_total = model_total.fit(disp=False, maxiter=200)
+print(f"✓ Model fitted – AIC: {results_total.aic:.2f}")
 
-model_names_display = ['SARIMA', 'Random Forest', 'Gradient Boosting']
-model_cols = ['SARIMA_MAE', 'Random_Forest_MAE', 'Gradient_Boosting_MAE']
-colors_comp = ['#2E86AB', '#06A77D', '#E63946']
+exog_forecast_total = pd.DataFrame({
+    'aadt': [total_aadt.iloc[-1]] * FORECAST_MONTHS
+}, index=forecast_dates)
 
-x = np.arange(len(roads_sorted))
-width = 0.25
+forecast_total = results_total.get_forecast(steps=FORECAST_MONTHS, exog=exog_forecast_total)
+forecast_mean_total = forecast_total.predicted_mean
+forecast_ci_total = forecast_total.conf_int(alpha=0.05)
 
-for i, (mcol, mname, mcolor) in enumerate(zip(model_cols, model_names_display, colors_comp)):
-    if mcol in comparison_df.columns:
-        vals = comparison_df[mcol].fillna(0).values
-        ax.bar(x + i * width, vals, width, label=mname, color=mcolor, edgecolor='black', linewidth=0.5)
+fig, ax = plt.subplots(figsize=(16, 7))
 
-ax.set_xlabel('Road', fontsize=12, fontweight='bold')
-ax.set_ylabel('Mean Absolute Error (MAE)', fontsize=12, fontweight='bold')
-ax.set_title('Model Comparison: MAE on 2024 Test Set', fontsize=15, fontweight='bold')
-ax.set_xticks(x + width)
-ax.set_xticklabels([r[:12] + '...' if len(r) > 12 else r for r in roads_sorted], rotation=45, ha='right')
-ax.legend(fontsize=11)
-ax.grid(axis='y', alpha=0.3, linestyle='--')
+ax.plot(total_crashes.index, total_crashes.values,
+        color='#2E86AB', linewidth=2.5, marker='o', markersize=4,
+        label='Historical Total Crashes', zorder=3)
+ax.plot(forecast_mean_total.index, forecast_mean_total.values,
+        color='#E63946', linewidth=2.5, linestyle='--', marker='o', markersize=4,
+        label='Forecast Total Crashes', zorder=3)
+ax.fill_between(forecast_mean_total.index,
+                forecast_ci_total.iloc[:, 0], forecast_ci_total.iloc[:, 1],
+                color='#E63946', alpha=0.15, label='95% Confidence Interval')
+ax.axvline(x=pd.Timestamp('2024-12-01'), color='gray',
+           linestyle=':', linewidth=2, alpha=0.7, label='Forecast Start')
+
+ax.set_title('Metro Manila Total Crashes – All Roads Combined (SARIMA Forecast)',
+             fontsize=16, fontweight='bold', pad=20)
+ax.set_xlabel('Date', fontsize=12, fontweight='bold')
+ax.set_ylabel('Total Crashes (All Roads)', fontsize=12, fontweight='bold')
+ax.legend(loc='lower left', fontsize=11, framealpha=0.9)
+ax.grid(True, alpha=0.3, linestyle='--')
+ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+ax.xaxis.set_major_locator(mdates.YearLocator())
+
+avg_2024_all = total_crashes[-12:].mean()
+avg_fc_all = forecast_mean_total.mean()
+change_all = ((avg_fc_all - avg_2024_all) / avg_2024_all) * 100
+
+textstr = f'2024 Avg: {avg_2024_all:.0f} crashes/month\n'
+textstr += f'Forecast Avg: {avg_fc_all:.0f} crashes/month\n'
+textstr += f'Expected Change: {change_all:+.1f}%\n\n'
+textstr += f'2025 Total: {forecast_mean_total[:12].sum():.0f} crashes\n'
+textstr += f'2026 Total: {forecast_mean_total[12:].sum():.0f} crashes'
+
+props = dict(boxstyle='round', facecolor='lightblue', alpha=0.8)
+ax.text(0.02, 0.98, textstr, transform=ax.transAxes, fontsize=11,
+        verticalalignment='top', bbox=props)
 plt.tight_layout()
 plt.show()
 
-# Full metrics table
-print("\nFull Model Comparison (2024 Test Set):")
-print("=" * 90)
-print(comparison_df.to_string(index=False, float_format='%.2f'))
+print("\n" + "=" * 70)
+print("METRO MANILA TOTAL CRASH FORECAST SUMMARY")
+print("=" * 70)
+print(f"\n  2024 Actual Total: {total_crashes[-12:].sum():.0f} crashes")
+print(f"  2025 Forecast:     {forecast_mean_total[:12].sum():.0f} crashes ({change_all:+.1f}% vs 2024)")
+print(f"  2026 Forecast:     {forecast_mean_total[12:].sum():.0f} crashes")
+print(f"\n  Average monthly crashes (forecast): {avg_fc_all:.0f}")
+print(f"\n  95% Confidence Interval:")
+print(f"    Lower bound: {forecast_ci_total.iloc[:, 0].mean():.0f} crashes/month")
+print(f"    Upper bound: {forecast_ci_total.iloc[:, 1].mean():.0f} crashes/month")
 
-# CELL 19
+# CELL 16
 # =============================================================================
-# CRASH RISK SCORING & PEAK MONTH ANALYSIS
+# SARIMA FORECASTING: CRASH SEVERITY TYPES (2025-2026)
 # =============================================================================
 
-print_section("CRASH RISK SCORING & PEAK MONTHS (2025-2026)")
+print_section("SARIMA FORECASTING: Crash Types – Fatal, Non-Fatal, Property (2025-2026)")
 
-print("Objective: Identify the riskiest months for targeted interventions")
+crash_types = df_ml.groupby('date').agg({
+    'crashes_fatal': 'sum', 'crashes_non_fatal': 'sum',
+    'crashes_property': 'sum', 'aadt': 'sum'
+}).sort_index()
+
+crash_type_predictions = {}
+labels = {
+    'crashes_fatal': 'Fatal Crashes',
+    'crashes_non_fatal': 'Non-Fatal Injury Crashes',
+    'crashes_property': 'Property Damage Only'
+}
+
+for crash_type in ['crashes_fatal', 'crashes_non_fatal', 'crashes_property']:
+    print(f"\nForecasting: {labels[crash_type]}")
+    y = crash_types[crash_type]
+    exog = pd.DataFrame({'aadt': crash_types['aadt']})
+
+    model_type = SARIMAX(y, exog=exog, order=(1, 1, 1), seasonal_order=(1, 1, 1, 12),
+                         enforce_stationarity=False, enforce_invertibility=False)
+    results_type = model_type.fit(disp=False, maxiter=200)
+
+    exog_fc = pd.DataFrame({'aadt': [crash_types['aadt'].iloc[-1]] * FORECAST_MONTHS}, index=forecast_dates)
+    forecast_type = results_type.get_forecast(steps=FORECAST_MONTHS, exog=exog_fc)
+
+    crash_type_predictions[crash_type] = {
+        'historical': y,
+        'forecast': forecast_type.predicted_mean,
+        'lower_ci': forecast_type.conf_int(alpha=0.05).iloc[:, 0],
+        'upper_ci': forecast_type.conf_int(alpha=0.05).iloc[:, 1]
+    }
+    print(f"  ✓ AIC: {results_type.aic:.2f}")
+    print(f"  ✓ 2025: {forecast_type.predicted_mean[:12].sum():.0f} | 2026: {forecast_type.predicted_mean[12:].sum():.0f}")
+
+fig, ax = plt.subplots(figsize=(16, 8))
+colors_sev = {'crashes_fatal': '#DC2F02', 'crashes_non_fatal': '#F77F00', 'crashes_property': '#06A77D'}
+
+for ct, data in crash_type_predictions.items():
+    c = colors_sev[ct]
+    lbl = labels[ct]
+    ax.plot(data['historical'].index, data['historical'].values,
+            color=c, linewidth=2, marker='o', markersize=3, label=f'{lbl} (Historical)', alpha=0.8)
+    ax.plot(data['forecast'].index, data['forecast'].values,
+            color=c, linewidth=2, marker='o', markersize=3, label=f'{lbl} (Forecast)', linestyle='--', alpha=0.8)
+    ax.fill_between(data['forecast'].index, data['lower_ci'], data['upper_ci'], color=c, alpha=0.08)
+
+ax.axvline(x=pd.Timestamp('2024-12-01'), color='gray', linestyle=':', linewidth=2, alpha=0.7, label='Forecast Start')
+ax.set_title('Metro Manila Crash Type Forecast by Severity (SARIMA)', fontsize=16, fontweight='bold', pad=20)
+ax.set_xlabel('Date', fontsize=12, fontweight='bold')
+ax.set_ylabel('Number of Crashes', fontsize=12, fontweight='bold')
+ax.legend(loc='upper left', fontsize=9, framealpha=0.9, ncol=2)
+ax.grid(True, alpha=0.3, linestyle='--')
+ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+ax.xaxis.set_major_locator(mdates.YearLocator())
+plt.tight_layout()
+plt.show()
+
+print("\n" + "=" * 70)
+print("CRASH TYPE FORECAST SUMMARY (2025-2026)")
+print("=" * 70)
+
+summary_data = []
+for ct, data in crash_type_predictions.items():
+    h24 = data['historical'][-12:].sum()
+    f25 = data['forecast'][:12].sum()
+    f26 = data['forecast'][12:].sum()
+    chg = ((f25 - h24) / h24) * 100
+    summary_data.append({
+        'Crash Type': labels[ct], '2024 Actual': int(h24),
+        '2025 Forecast': int(f25), '2026 Forecast': int(f26), 'Change %': f'{chg:+.1f}%'
+    })
+
+print("\n", pd.DataFrame(summary_data).to_string(index=False))
+
+total_fc = sum([d['forecast'].sum() for d in crash_type_predictions.values()])
+print(f"\nExpected Severity Distribution (2025-2026):")
+for ct, data in crash_type_predictions.items():
+    pct = (data['forecast'].sum() / total_fc) * 100
+    print(f"  {labels[ct]:30s}: {pct:5.1f}%")
+
+# CELL 17
+# =============================================================================
+# SARIMA: CRASH RATE PER 100K AADT (Safety Trends)
+# =============================================================================
+
+print_section("SARIMA FORECASTING: Crash Rate per 100k AADT (Safety Trends)")
+
+print("Why Crash Rate Matters:")
+print("  → Shows if roads are getting safer/more dangerous independent of traffic growth")
+print("  → Helps identify if safety improvements are working")
+print("  → Fair comparison across roads with different traffic volumes")
+print("\n" + "=" * 80)
+
+crash_rate_predictions = {}
+
+for i, road in enumerate(roads_sorted, 1):
+    print(f"\n[{i}/7] {road}")
+    print("-" * 60)
+
+    road_data = df_ml[df_ml['road_name'] == road].sort_values('date').set_index('date')
+    y_rate = road_data['crash_rate_per_100k']
+
+    try:
+        model_rate = SARIMAX(y_rate, order=(1, 1, 1), seasonal_order=(1, 1, 1, 12),
+                             enforce_stationarity=False, enforce_invertibility=False)
+        results_rate = model_rate.fit(disp=False, maxiter=200)
+
+        fc_rate = results_rate.get_forecast(steps=FORECAST_MONTHS)
+        fc_mean_rate = fc_rate.predicted_mean
+        fc_ci_rate = fc_rate.conf_int(alpha=0.05)
+
+        crash_rate_predictions[road] = {
+            'historical': y_rate, 'forecast': fc_mean_rate,
+            'lower_ci': fc_ci_rate.iloc[:, 0], 'upper_ci': fc_ci_rate.iloc[:, 1]
+        }
+
+        avg24 = y_rate[-12:].mean()
+        avg_fc = fc_mean_rate.mean()
+        chg = ((avg_fc - avg24) / avg24) * 100
+
+        fig, ax = plt.subplots(figsize=(14, 5))
+        ax.plot(y_rate.index, y_rate.values, color='#06A77D', linewidth=2, marker='o', markersize=3, label='Historical')
+        ax.plot(fc_mean_rate.index, fc_mean_rate.values, color='#DC2F02', linewidth=2, linestyle='--', marker='o', markersize=3, label='Forecast')
+        ax.fill_between(fc_mean_rate.index, fc_ci_rate.iloc[:, 0], fc_ci_rate.iloc[:, 1], color='#DC2F02', alpha=0.15)
+        ax.axvline(x=pd.Timestamp('2024-12-01'), color='gray', linestyle=':', linewidth=2, alpha=0.7)
+        ax.set_title(f'{road} – Crash Rate Forecast (per 100k AADT)', fontsize=14, fontweight='bold')
+        ax.set_ylabel('Crash Rate (per 100k AADT)')
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3, linestyle='--')
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+
+        box_color = 'lightgreen' if chg < 0 else 'lightyellow'
+        trend_txt = '✓ Improving Safety' if chg < 0 else '⚠ Worsening Safety'
+        txt = f'2024 Rate: {avg24:.1f}\nForecast: {avg_fc:.1f}\nTrend: {chg:+.1f}%\n{trend_txt}'
+        ax.text(0.02, 0.98, txt, transform=ax.transAxes, fontsize=10,
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor=box_color, alpha=0.8))
+        plt.tight_layout()
+        plt.show()
+
+        print(f"  Safety Trend: {chg:+.1f}% ({'Improving' if chg < 0 else 'Worsening'})")
+
+    except Exception as e:
+        print(f"  ✗ Error: {str(e)}")
+
+print("\n" + "=" * 80)
+print("CRASH RATE FORECAST SUMMARY (Safety Trends)")
 print("=" * 80)
 
-# Compile SARIMA predictions
+safety_rows = []
+for road, data in crash_rate_predictions.items():
+    a24 = data['historical'][-12:].mean()
+    afc = data['forecast'].mean()
+    chg = ((afc - a24) / a24) * 100
+    safety_rows.append({
+        'Road': road, '2024 Rate': f'{a24:.1f}', 'Forecast Rate': f'{afc:.1f}',
+        'Change %': f'{chg:+.1f}%', 'Trend': '✓ Improving' if chg < 0 else '⚠ Worsening'
+    })
+
+print("\n", pd.DataFrame(safety_rows).to_string(index=False))
+
+# CELL 18
+# =============================================================================
+# MODEL EVALUATION: SARIMA Performance Summary
+# =============================================================================
+
+print_section("SARIMA MODEL EVALUATION (2024 Holdout Test)")
+
+print("Evaluation method: Train on 2019-2023, test on 2024 (12-month holdout)")
+print("=" * 80)
+
+eval_rows = []
+for road in roads_sorted:
+    if road in sarima_eval:
+        e = sarima_eval[road]
+        eval_rows.append({'Road': road, 'MAE': e['MAE'], 'RMSE': e['RMSE'], 'R²': e['R2']})
+
+eval_df = pd.DataFrame(eval_rows)
+print("\n", eval_df.to_string(index=False, float_format='%.2f'))
+
+fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+for ax_i, (metric, color) in enumerate([('MAE', '#2E86AB'), ('RMSE', '#E63946'), ('R²', '#06A77D')]):
+    ax = axes[ax_i]
+    vals = eval_df[metric].values
+    roads_short = [r[:12] + '..' if len(r) > 12 else r for r in eval_df['Road']]
+    bars = ax.barh(roads_short, vals, color=color, edgecolor='black', linewidth=0.5)
+    ax.set_title(f'{metric}', fontsize=14, fontweight='bold')
+    ax.grid(axis='x', alpha=0.3, linestyle='--')
+    for bar, val in zip(bars, vals):
+        ax.text(bar.get_width() + max(vals) * 0.02, bar.get_y() + bar.get_height()/2,
+                f'{val:.2f}', va='center', fontsize=9, fontweight='bold')
+
+fig.suptitle('SARIMA Model Performance by Road (2024 Holdout)', fontsize=16, fontweight='bold')
+plt.tight_layout()
+plt.show()
+
+avg_mae = eval_df['MAE'].mean()
+avg_r2 = eval_df['R²'].mean()
+print(f"\nOverall SARIMA Performance:")
+print(f"  Average MAE: {avg_mae:.1f} crashes/month")
+print(f"  Average R²:  {avg_r2:.3f}")
+
+if avg_r2 > 0.5:
+    print("  → Good predictive performance – model captures crash patterns well")
+elif avg_r2 > 0:
+    print("  → Moderate performance – model captures some patterns but has room for improvement")
+else:
+    print("  → Weak performance – crash patterns are difficult to predict with available features")
+
+# CELL 18
+# =============================================================================
+# PEAK CRASH MONTHS & ACTIONABLE INSIGHTS (2025-2026)
+# =============================================================================
+
+print_section("PEAK CRASH MONTHS & ACTIONABLE INSIGHTS (2025-2026)")
+
 all_predictions = []
 for road, data in predictions_by_road.items():
-    forecast_data = pd.DataFrame({
-        'date': data['forecast'].index,
-        'road': road,
+    fd = pd.DataFrame({
+        'date': data['forecast'].index, 'road': road,
         'predicted_crashes': data['forecast'].values,
-        'lower_ci': data['lower_ci'].values,
-        'upper_ci': data['upper_ci'].values
+        'lower_ci': data['lower_ci'].values, 'upper_ci': data['upper_ci'].values
     })
-    forecast_data['year'] = forecast_data['date'].dt.year
-    forecast_data['month'] = forecast_data['date'].dt.month
-    all_predictions.append(forecast_data)
+    fd['year'] = fd['date'].dt.year
+    fd['month'] = fd['date'].dt.month
+    all_predictions.append(fd)
 
 predictions_df = pd.concat(all_predictions, ignore_index=True)
-
-# Peak months by road
-months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-          'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 for yr in [2025, 2026]:
-    print(f"\nPEAK MONTHS BY ROAD ({yr})")
+    print(f"\nPEAK CRASH MONTHS BY ROAD ({yr})")
     print("-" * 70)
     peak = predictions_df[predictions_df['year'] == yr].groupby('road').apply(
         lambda x: x.loc[x['predicted_crashes'].idxmax()]
     ).reset_index(drop=True)
-
     for _, row in peak.iterrows():
-        mname = months[int(row['month']) - 1]
-        print(f"  {row['road']:25s} → {mname} {yr} ({row['predicted_crashes']:.0f} crashes)")
+        print(f"  {row['road']:25s} → {months[int(row['month'])-1]} {yr} ({row['predicted_crashes']:.0f} crashes)")
 
-# Overall monthly risk rankings
-print("\nOVERALL MONTHLY RISK RANKINGS (2025-2026)")
+print("\nOVERALL MONTHLY RISK RANKINGS (2025-2026 Combined)")
 print("-" * 70)
 
 monthly_totals = predictions_df.groupby('month')['predicted_crashes'].sum().sort_values(ascending=False)
-for month_num, total in monthly_totals.items():
-    mname = months[int(month_num) - 1]
+for mnum, total in monthly_totals.items():
     avg = total / 2 / 7
-    print(f"  {mname:3s}: {avg:.0f} crashes/road (Total: {total:.0f})")
+    print(f"  {months[int(mnum)-1]:3s}: {avg:.0f} avg crashes/road/month (Total all roads: {total:.0f})")
 
-# Heatmap visualization
 fig, axes = plt.subplots(1, 2, figsize=(18, 6))
 
 for ax_i, yr in enumerate([2025, 2026]):
-    heatmap_data = predictions_df[predictions_df['year'] == yr].pivot_table(
-        index='road', columns='month', values='predicted_crashes', aggfunc='sum'
-    )
-    sns.heatmap(heatmap_data, annot=True, fmt='.0f', cmap='YlOrRd',
+    hm = predictions_df[predictions_df['year'] == yr].pivot_table(
+        index='road', columns='month', values='predicted_crashes', aggfunc='sum')
+    sns.heatmap(hm, annot=True, fmt='.0f', cmap='YlOrRd',
                 cbar_kws={'label': 'Predicted Crashes'}, ax=axes[ax_i])
-    axes[ax_i].set_title(f'{yr} - Predicted Crashes by Month', fontsize=14, fontweight='bold')
+    axes[ax_i].set_title(f'{yr} – Predicted Crashes by Road × Month', fontsize=14, fontweight='bold')
     axes[ax_i].set_xlabel('Month', fontweight='bold')
     axes[ax_i].set_ylabel('Road', fontweight='bold')
     axes[ax_i].set_xticklabels(months, rotation=0)
 
-plt.suptitle('Peak Crash Months Forecast - Heat Calendar', fontsize=16, fontweight='bold', y=1.02)
+plt.suptitle('Crash Forecast Heat Calendar (2025-2026)', fontsize=16, fontweight='bold', y=1.02)
 plt.tight_layout()
 plt.show()
 
-# Top 10 riskiest combinations
 print("\nTOP 10 RISKIEST MONTH-ROAD COMBINATIONS (2025-2026)")
 print("-" * 70)
-top_risks = predictions_df.nlargest(10, 'predicted_crashes')[['date', 'road', 'predicted_crashes']].copy()
-top_risks['month_year'] = top_risks['date'].dt.strftime('%b %Y')
-print("\n", top_risks[['month_year', 'road', 'predicted_crashes']].to_string(index=False))
+top10 = predictions_df.nlargest(10, 'predicted_crashes')[['date', 'road', 'predicted_crashes']].copy()
+top10['month_year'] = top10['date'].dt.strftime('%b %Y')
+print("\n", top10[['month_year', 'road', 'predicted_crashes']].to_string(index=False))
 
-# Actionable insights
 print("\n" + "=" * 80)
 print("ACTIONABLE INSIGHTS FOR ROAD SAFETY PLANNING")
 print("=" * 80)
@@ -1178,34 +1148,45 @@ print("=" * 80)
 peak_all = []
 for yr in [2025, 2026]:
     pk = predictions_df[predictions_df['year'] == yr].groupby('road').apply(
-        lambda x: x.loc[x['predicted_crashes'].idxmax()]
-    ).reset_index(drop=True)
+        lambda x: x.loc[x['predicted_crashes'].idxmax()]).reset_index(drop=True)
     peak_all.append(pk)
-
 peak_combined = pd.concat(peak_all)
-peak_month_counts = peak_combined['month'].value_counts()
-most_common_peak = peak_month_counts.idxmax()
-most_common_peak_name = months[int(most_common_peak) - 1]
+peak_counts = peak_combined['month'].value_counts()
+top_peak = months[int(peak_counts.idxmax()) - 1]
 
-print(f"\n1. MOST COMMON PEAK MONTH: {most_common_peak_name}")
-print(f"   → {peak_month_counts.max()} out of 14 road-year combinations peak in this month")
+print(f"\n1. MOST COMMON PEAK MONTH: {top_peak}")
+print(f"   → {peak_counts.max()} of 14 road-year combinations peak in {top_peak}")
+print(f"   → Recommendation: Intensify enforcement and monitoring during {top_peak}")
 
-max_crashes = predictions_df.groupby('road')['predicted_crashes'].max().sort_values(ascending=False)
+max_cr = predictions_df.groupby('road')['predicted_crashes'].max().sort_values(ascending=False)
 print(f"\n2. ROADS REQUIRING MOST ATTENTION:")
-for i, (road, crashes) in enumerate(max_crashes.head(3).items(), 1):
-    print(f"   {i}. {road:25s} - Peak: {crashes:.0f} crashes/month")
+for i, (road, cr) in enumerate(max_cr.head(3).items(), 1):
+    print(f"   {i}. {road:25s} – Peak month: {cr:.0f} crashes")
 
 predictions_df['season'] = predictions_df['month'].apply(
-    lambda x: 'Q1' if x in [1,2,3] else 'Q2' if x in [4,5,6] else 'Q3' if x in [7,8,9] else 'Q4'
-)
+    lambda x: 'Q1 (Jan-Mar)' if x in [1,2,3] else 'Q2 (Apr-Jun)' if x in [4,5,6]
+    else 'Q3 (Jul-Sep)' if x in [7,8,9] else 'Q4 (Oct-Dec)')
 seasonal = predictions_df.groupby('season')['predicted_crashes'].sum().sort_values(ascending=False)
-print(f"\n3. SEASONAL PATTERNS:")
-print(f"   Highest risk quarter: {seasonal.idxmax()} ({seasonal.max():.0f} total crashes)")
-print(f"   Lowest risk quarter:  {seasonal.idxmin()} ({seasonal.min():.0f} total crashes)")
+print(f"\n3. SEASONAL RISK PATTERNS:")
+for szn, total in seasonal.items():
+    avg = total / 2 / 7
+    print(f"   {szn:20s}: {avg:.0f} avg crashes/road/month (Total: {total:.0f})")
 
-print(f"\n4. BEST PREDICTION MODEL PER ROAD:")
-for road, model in best_models.items():
-    print(f"   {road:25s} → {model}")
+print(f"\n4. YEAR-OVER-YEAR FORECAST:")
+total_2025 = predictions_df[predictions_df['year'] == 2025]['predicted_crashes'].sum()
+total_2026 = predictions_df[predictions_df['year'] == 2026]['predicted_crashes'].sum()
+yoy_chg = ((total_2026 - total_2025) / total_2025) * 100
+print(f"   2025 Total (all roads): {total_2025:.0f} crashes")
+print(f"   2026 Total (all roads): {total_2026:.0f} crashes")
+print(f"   Year-over-year change:  {yoy_chg:+.1f}%")
 
-print("\n✓ Analysis complete!")
+print(f"\n5. SAFETY TREND SUMMARY (Crash Rate per 100k AADT):")
+improving = [r for r, d in crash_rate_predictions.items()
+             if ((d['forecast'].mean() - d['historical'][-12:].mean()) / d['historical'][-12:].mean()) < 0]
+worsening = [r for r in crash_rate_predictions if r not in improving]
+print(f"   Roads with IMPROVING safety: {', '.join(improving) if improving else 'None'}")
+print(f"   Roads with WORSENING safety: {', '.join(worsening) if worsening else 'None'}")
+
+print("\n" + "=" * 80)
+print("✓ Complete analysis finished!")
 print("=" * 80)
