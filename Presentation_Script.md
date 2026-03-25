@@ -5,13 +5,13 @@
 
 ---
 
-## [SLIDE 1: Title]
+## [SLIDE 1: Title] - J
 
 "Good day everyone. Our study is about **Metro Manila Road Crash Analysis** — specifically, we're investigating whether traffic volume increases crashes on major roads. We used data from 2019 to 2024 and applied both data analysis and forecasting to answer this question."
 
 ---
 
-## [SLIDE 2: Introduction]
+## [SLIDE 2: Introduction] - T
 
 "So we all know Metro Manila is one of the most congested cities in the world. Millions of vehicles use its roads every day, and unfortunately, road crashes are a constant concern."
 
@@ -19,7 +19,7 @@
 
 ---
 
-## [SLIDE 3: The Dataset]
+## [SLIDE 3: The Dataset] - T
 
 "Our data comes from the **MMDA MMARAS Annual Reports** — these are the official crash records for Metro Manila."
 
@@ -29,7 +29,7 @@
 
 ---
 
-## [SLIDE 4: What is AADT?]
+## [SLIDE 4: What is AADT?] - T
 
 "Before we go further — what is AADT? It stands for **Average Annual Daily Traffic**. It's basically the average number of vehicles that pass through a road every day over the course of a year."
 
@@ -37,7 +37,7 @@
 
 ---
 
-## [SLIDE 5: AADT & Crash Trends]
+## [SLIDE 5: AADT & Crash Trends] - J
 
 *Point to chart*
 
@@ -49,7 +49,7 @@
 
 ---
 
-## [SLIDE 6: AADT vs Crashes Relationship]
+## [SLIDE 6: AADT vs Crashes Relationship] - J
 
 "Now the key question — **does more traffic actually lead to more crashes?**"
 
@@ -61,7 +61,7 @@
 
 ---
 
-## [SLIDE 7: Severity & Monthly Patterns]
+## [SLIDE 7: Severity & Monthly Patterns] - T
 
 "In terms of crash severity, **property damage** makes up the largest portion across all roads. Non-fatal injuries are next, and fatal crashes are the lowest in number — but still significant."
 
@@ -71,7 +71,7 @@
 
 ---
 
-## [SLIDE 8: What is SARIMA?]
+## [SLIDE 8: What is SARIMA?] - J
 
 "Now let's move to the forecasting part. This is where we use a model called **SARIMA** to predict future crashes."
 
@@ -95,7 +95,7 @@
 
 ---
 
-## [SLIDE 9: Per-Road Forecasts]
+## [SLIDE 9: Per-Road Forecasts]- J
 
 *Show 2–3 forecast charts*
 
@@ -105,7 +105,7 @@
 
 ---
 
-## [SLIDE 10: All Roads Combined]
+## [SLIDE 10: All Roads Combined] - T
 
 "We also ran a forecast for **all 7 roads combined** — so this is basically the total Metro Manila picture."
 
@@ -115,7 +115,7 @@
 
 ---
 
-## [SLIDE 11: Crash Type Forecasts]
+## [SLIDE 11: Crash Type Forecasts] - J
 
 "We didn't just forecast total crashes — we also forecasted each **crash type separately**: fatal, non-fatal, and property damage."
 
@@ -125,7 +125,7 @@
 
 ---
 
-## [SLIDE 12: Safety Trends]
+## [SLIDE 12: Safety Trends] - J
 
 "This is one of the most insightful parts. Instead of just forecasting raw crash counts, we forecasted the **crash rate per 100,000 vehicles** for each road."
 
@@ -135,7 +135,7 @@
 
 ---
 
-## [SLIDE 13: Peak Months & High-Risk Periods]
+## [SLIDE 13: Peak Months & High-Risk Periods] - J
 
 *Point to heatmaps*
 
@@ -145,7 +145,7 @@
 
 ---
 
-## [SLIDE 14: Key Findings]
+## [SLIDE 14: Key Findings] - J
 
 "To summarize our findings:"
 
@@ -157,7 +157,7 @@
 
 ---
 
-## [SLIDE 15: Recommendations]
+## [SLIDE 15: Recommendations] - T
 
 "Based on our analysis, we recommend:"
 
@@ -168,7 +168,7 @@
 
 ---
 
-## [SLIDE 16: Conclusion]
+## [SLIDE 16: Conclusion] - J
 
 "In conclusion, traffic volume is a meaningful but not sole predictor of road crashes. Our study combines comprehensive data analysis with SARIMA forecasting to give a complete picture of road safety in Metro Manila from 2019 to 2024, with actionable forecasts for 2025 and 2026. Thank you."
 
